@@ -1,0 +1,20 @@
+{
+  "app": {
+    "sendInterval": 2000,
+    "loggingLevel": "DEBUG"
+  },
+  "ble": {
+    "hciDeviceNum": 1,
+    "deviceMACs": [
+      "cb:e9:b1:0b:50:4d",
+      "e1:57:bc:b2:c9:46",
+      "ff:c3:0f:35:1e:c2"
+    ]
+  },
+  "mqtt": {
+    "host": "xx.xx.xx.xx",
+    "port": 1883,
+    "topic": "messages",
+    "deviceId": "C031051823-00130"
+  }
+}

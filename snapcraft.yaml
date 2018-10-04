@@ -1,0 +1,28 @@
+name: sn-node-hello-world
+version: '1.1.2'
+summary: Nordic Thingy:52 + Node.js + ServiceNow IoT Hub snap example
+description: Example of snapped Node.js application for communications with Nordic Thingy:52
+confinement: strict
+grade: stable
+
+parts:
+  thingy-hello-world:
+    plugin: nodejs
+    source: .
+    build-packages:
+      - libudev-dev
+      - libbluetooth-dev
+      - python
+      - g++
+      - make
+      - bluez
+
+apps:
+  thingy-hello-world:
+    command: bin/thingy-hello-world
+    daemon: simple
+    restart-condition: always
+    plugs:
+      - network
+      - network-control
+      - bluetooth-control
