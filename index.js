@@ -21,10 +21,12 @@ const SEND_GATEWAY_CONNECTED = 'GATEWAY_CONNECTED';
 const SEND_DEVICE_CONNECTED = 'DEVICE_CONNECTED';
 
 const BROKER_CONNECT_INTERVAL = 3000;
-const DISCOVER_RESTART_TIMEOUT = 5000; // XXX: Workaround for noble-device issue
+const DISCOVERY_INTERVAL = 6000;
+const DISCOVERY_RESTART_TIMEOUT = 5000; // XXX: Workaround for noble-device issue
+const DISCOVER_WITH_FILTER_TIMEOUT = 3000;
 const APPLICATION_START_TIMEOUT = 5000; // XXX: Wait HCI devices on system startup
 
-let brokerConnectTaskId = null;
+let discoveryTaskId = null;
 let dataTransmissionTaskId = null;
 
 let brokerConnectionState = BROKER_STATE_READY;
@@ -32,9 +34,7 @@ let applicationState = APP_STATE_RUNNING;
 
 let mqttClient = null;
 let connectedThingies = {};
-let multiThingyState = {
-
-};
+let multiThingyState = {};
 let config = {};
 
 // Commons
@@ -99,18 +99,15 @@ const brokerConnect = (mqttConfig) => {
 };
 
 const startBrokerConnectTask = (appConfig) => {
-  log('Start Broker Connect Task ...');
-  return setInterval(() => {
-    if (brokerConnectionState !== BROKER_STATE_CONNECTING
-        && brokerConnectionState !== BROKER_STATE_CONNECTED) {
-      brokerConnect(appConfig.mqtt);
-    }
-  }, BROKER_CONNECT_INTERVAL);
+  log('Start Broker Connect ...');
+  if (brokerConnectionState !== BROKER_STATE_CONNECTING
+      && brokerConnectionState !== BROKER_STATE_CONNECTED) {
+    brokerConnect(appConfig.mqtt);
+  }
 };
 
 const stopBrokerConnectTask = () => {
-  log('Stop Broker Connect Task ...');
-  clearInterval(brokerConnectTaskId);
+  log('Stop Broker ...');
   brokerDisconnect();
 };
 
@@ -122,9 +119,6 @@ const disconnectThingies = (disconnected) => {
     Object.keys(connectedThingies).forEach((id) => {
       connectedThingies[id].disconnect();
     });
-    // connectedThingies.entries().forEach((id, thingy) => {
-    //   thingy.disconnect();
-    // });
   }
   connectedThingies = {};
   multiThingyState = {};
@@ -132,58 +126,64 @@ const disconnectThingies = (disconnected) => {
 
 const macToId = mac => (mac.toLowerCase().replace(new RegExp(':', 'g'), ''));
 
-const startDiscoverThingyTask = (appConfig) => {
+const startDiscoverThings = (appConfig) => {
   const handleDiscover = (thingy) => {
-    if (!connectedThingies[thingy.address]) {
+    if (!connectedThingies[thingy.id]) {
       connectAndSetupThingy(thingy); // eslint-disable-line no-use-before-define
     }
   };
-  log('Start Discovery Task ...');
+  log('Discovering Things... already connected thingies:', multiThingyState, LOGGING_LEVELS.INFO);
+  Thingy.SCAN_DUPLICATES = true;
+  Thingy.startScanning();
+  Thingy.stopScanning();
+  // Thingy.stopScanning();
   appConfig.ble.deviceMACs.forEach((mac) => {
     const id = macToId(mac);
-    log(`Trying to discover device: ${id}`);
-    Thingy.discoverWithFilter((device) => {
-      const result = (id === device.id);
-      if (result) {
-        log(`Discovered: ${device.id} target: ${id}`, '', LOGGING_LEVELS.INFO);
-      }
-      return result;
-    }, handleDiscover);
+    if (!connectedThingies[id]) {
+      log(`Trying to discover device: ${id}`);
+      setTimeout(() => {
+        Thingy.discoverWithFilter((device) => {
+          const result = (id === device.id);
+          if (result) {
+            log(`Discovered: ${device.id} target: ${id}`, '', LOGGING_LEVELS.INFO);
+          }
+          return result;
+        }, handleDiscover);
+      }, DISCOVER_WITH_FILTER_TIMEOUT);
+    }
   });
 };
 
-const stopDiscoverThingyTask = (disconnected) => {
-  log('Stop Discovery Task ...');
-  Thingy.stopDiscover((err) => {
+const stopDiscoverThings = () => {
+  Thingy.stopDiscoverAll((err) => {
     if (err) {
       log('Connection/Setup problem, disconnecting ...', err, LOGGING_LEVELS.ERROR);
     }
   });
-  disconnectThingies(disconnected);
+  // disconnectThingies(disconnected);
 };
 
-const restartDiscoverThingyTask = (disconnected) => {
+const startDiscoveryRestartTask = () => {
+  log('Start Discovery Task ...');
   const appConfig = loadConfig();
-  stopDiscoverThingyTask(disconnected);
-  setTimeout(() => {
-    startDiscoverThingyTask(appConfig);
-  }, DISCOVER_RESTART_TIMEOUT);
+  setInterval(() => {
+    stopDiscoverThings();
+    setTimeout(() => {
+      startDiscoverThings(appConfig);
+    }, DISCOVERY_RESTART_TIMEOUT);
+  }, DISCOVERY_INTERVAL);
+};
+
+const stopDiscoveryRestartTask = () => {
+  log('Stop Discovery Task ...');
+  clearInterval(discoveryTaskId);
 };
 
 const connectAndSetupThingy = (thingy) => {
   const handleError = (error) => {
     if (error) {
       log('Connection/Setup problem, disconnecting ...', error, LOGGING_LEVELS.ERROR);
-      restartDiscoverThingyTask();
     }
-  };
-
-  multiThingyState[thingy.address] = {
-    temperature: 0,
-    humidity: 0,
-    pressure: 0,
-    button: false,
-    deviceId: macToId(thingy.address)
   };
 
   log('Connecting to the Thingy:52', thingy.id, LOGGING_LEVELS.INFO);
@@ -199,27 +199,37 @@ const connectAndSetupThingy = (thingy) => {
       thingy.button_enable(handleError);
       thingy.on('buttonNotif', (state) => {
         if (state === 'Pressed') {
-          multiThingyState[thingy.address].button = true;
+          multiThingyState[thingy.id].button = true;
+          multiThingyState[thingy.id].button_number = 1;
         }
       });
       thingy.temperature_enable(handleError);
       thingy.on('temperatureNotif', (temp) => {
-        multiThingyState[thingy.address].temperature = temp;
+        multiThingyState[thingy.id].temperature = temp;
       });
       thingy.humidity_enable(handleError);
       thingy.on('humidityNotif', (hum) => {
-        multiThingyState[thingy.address].humidity = hum;
+        multiThingyState[thingy.id].humidity = hum;
       });
       thingy.pressure_enable(handleError);
       thingy.on('pressureNotif', (pres) => {
-        multiThingyState[thingy.address].pressure = pres;
+        multiThingyState[thingy.id].pressure = pres;
       });
       // Service
       thingy.on('disconnect', () => {
-        log('Thingy:52 disconnected', LOGGING_LEVELS.INFO);
-        restartDiscoverThingyTask(true);
+        log(`Thingy disconnected: ${thingy.id}`, LOGGING_LEVELS.INFO);
+        delete multiThingyState[thingy.id];
+        delete connectedThingies[thingy.id];
       });
-      connectedThingies[thingy.address] = thingy;
+      connectedThingies[thingy.id] = thingy;
+      multiThingyState[thingy.id] = {
+        temperature: 0,
+        humidity: 0,
+        pressure: 0,
+        button: false,
+        button_number: 0,
+        deviceId: thingy.id
+      };
       log('Successfully connected to ', thingy.id, LOGGING_LEVELS.INFO);
     }
   });
@@ -240,6 +250,7 @@ const send = (appConfig, payload, status) => {
     msg.humidity = payload.humidity;
     msg.pressure = payload.pressure;
     msg.button = payload.button;
+    msg.button_number = payload.button_number;
     msg.deviceId = payload.deviceId;
   }
   const jsonMsg = JSON.stringify(msg);
@@ -248,8 +259,11 @@ const send = (appConfig, payload, status) => {
 };
 
 const sendDeviceState = (thingy, appConfig) => {
-  send(appConfig, multiThingyState[thingy.address], SEND_DEVICE_CONNECTED);
-  multiThingyState[thingy.address].button = false;
+  if (multiThingyState[thingy.id]) {
+    send(appConfig, multiThingyState[thingy.id], SEND_DEVICE_CONNECTED);
+    multiThingyState[thingy.id].button = false;
+    multiThingyState[thingy.id].button_number = 0;
+  }
 };
 
 const sendHealth = (appConfig) => {
@@ -283,8 +297,9 @@ const stopSendingTask = () => {
 const start = (appConfig) => {
   log('Starting with Config: ', appConfig, LOGGING_LEVELS.INFO);
 
-  brokerConnectTaskId = startBrokerConnectTask(appConfig);
-  startDiscoverThingyTask(appConfig);
+  startBrokerConnectTask(appConfig);
+  startDiscoverThings(appConfig);
+  discoveryTaskId = startDiscoveryRestartTask(appConfig);
   dataTransmissionTaskId = startSendingTask(appConfig);
 };
 
@@ -294,7 +309,8 @@ const stop = () => {
   log('Stopping ...');
   stopSendingTask();
   stopBrokerConnectTask();
-  stopDiscoverThingyTask();
+  stopDiscoveryRestartTask();
+  stopDiscoverThings();
 };
 
 const init = () => {
