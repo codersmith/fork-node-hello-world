@@ -135,7 +135,6 @@ const startDiscoverThings = (appConfig) => {
   log('Discovering Things... already connected thingies:', multiThingyState, LOGGING_LEVELS.INFO);
   Thingy.SCAN_DUPLICATES = true;
   Thingy.startScanning();
-  Thingy.stopScanning();
   // Thingy.stopScanning();
   appConfig.ble.deviceMACs.forEach((mac) => {
     const id = macToId(mac);
@@ -152,6 +151,7 @@ const startDiscoverThings = (appConfig) => {
       }, DISCOVER_WITH_FILTER_TIMEOUT);
     }
   });
+  Thingy.stopScanning();
 };
 
 const stopDiscoverThings = () => {
